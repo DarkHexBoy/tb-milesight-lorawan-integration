@@ -47,7 +47,7 @@ headers = {
     'Content-Type': 'application/json',
     'X-Authorization': f'Bearer {jwt_token}'
 }
-print('[1] 登录成功，JWT token 获取完毕')
+print(f"[INFO] 登录成功，JWT token 获取完毕")
 
 # === 第二步：检查并跳过已存在的 Device Profile ===
 create_device_profile_url = f'{TB_HOST}/api/deviceProfile'
@@ -60,7 +60,7 @@ profiles = profiles_resp.json().get('data', [])
 existing_profile = next((p for p in profiles if p['name'] == device_profile_name), None)
 
 if existing_profile:
-    print(f"Device Profile 已存在，跳过创建: {device_profile_name}")
+    print(f"[INFO] Device Profile 已存在，跳过创建: {device_profile_name}")
     device_profile_id = existing_profile['id']['id']
 else:
     device_profile_payload = {
@@ -234,12 +234,9 @@ else:
         print(f"服务器返回错误: {create_profile_resp.status_code}, 响应内容: {create_profile_resp.text}")
         raise e
     device_profile_id = create_profile_resp.json()['id']['id']
-    print(f'[2] Device Profile 创建成功，名字: {device_profile_name}')
+    print(f"[INFO] Device Profile 创建成功，名字: {device_profile_name}")
 
-# === 第三步：检查并跳过已存在的设备 ===
-create_device_url = f'{TB_HOST}/api/device'
-
-# 检查是否存在同名设备
+# === 第三步：检查设备是否存在 ===
 get_devices_url = f'{TB_HOST}/api/tenant/devices?pageSize=100&page=0'
 get_devices_resp = requests.get(get_devices_url, headers=headers)
 get_devices_resp.raise_for_status()
@@ -248,51 +245,91 @@ existing_device = next((d for d in existing_devices if d['name'] == device_name)
 
 # 如果设备已存在，从配置文件中读取 Access Token
 if existing_device:
+    device_id = existing_device['id']['id']
+    print(f"[INFO] {device_name} 设备已存在，跳过创建")
+
+    # 从配置文件中读取 Access Token
     access_token = config['Device'].get('access_token')
+
+    # 测试 Access Token 是否有效
+    if access_token:
+        test_url = f"{TB_HOST}/api/v1/{access_token}/attributes"
+        try:
+            test_resp = requests.get(test_url, headers={'Content-Type': 'application/json'})
+            if test_resp.status_code == 200:
+                print(f"[INFO] 配置文件中的 Access Token 有效，继续使用")
+            else:
+                print(f"[WARNING] Access Token 测试返回非 200 状态码: {test_resp.status_code}, 响应内容: {test_resp.text}")
+                raise Exception("Access Token 无效")
+        except Exception as e:
+            print(f"[WARNING] 当前 Access Token 无效，尝试从 ThingsBoard 重新获取: {e}")
+            access_token = None
+
     if not access_token:
-        print("[Error] 设备已存在，但配置文件中未找到 Access Token。请检查配置文件。")
-        exit(1)
+        # 从 ThingsBoard 重新获取 Access Token
+        get_credentials_url = f"{TB_HOST}/api/device/{device_id}/credentials"
+        credentials_resp = requests.get(get_credentials_url, headers=headers)
+        credentials_resp.raise_for_status()
+        access_token = credentials_resp.json()['credentialsId']
+        print(f"[INFO] 重新获取的 Access Token: {access_token}")
+
+        # 更新配置文件
+        config.set('Device', 'access_token', access_token)
+        with open('config.ini', 'w') as configfile:
+            config.write(configfile)
+        print(f"[INFO] Access Token 已更新并保存到配置文件")
 else:
+    # 如果设备不存在，创建设备
     device_payload = {
-        "name": device_name,  # 使用自定义设备名
-        "type": "DEFAULT",           # 设备类型
-        "deviceProfileId": {"id": device_profile_id, "entityType": "DEVICE_PROFILE"},  # 修复为嵌套对象格式
+        "name": device_name,
+        "type": "DEFAULT",
+        "deviceProfileId": {"id": device_profile_id, "entityType": "DEVICE_PROFILE"},
         "additionalInfo": {
             "gateway": True
         }
     }
-    print(f"准备发送的设备数据: {json.dumps(device_payload, indent=2)}")  # 打印调试信息
-
+    create_device_url = f'{TB_HOST}/api/device'
     create_device_resp = requests.post(create_device_url, json=device_payload, headers=headers)
-    if create_device_resp.status_code != 200:
-        print(f"服务器返回错误: {create_device_resp.status_code}, 响应内容: {create_device_resp.text}")
     create_device_resp.raise_for_status()
     device_id = create_device_resp.json()['id']['id']
-    print(f"[3] 设备创建成功，设备 ID: {device_id}")
+    print(f"[INFO] 设备创建成功，设备 ID: {device_id}")
 
-    # === 第四步：设置服务器端属性 ===
-    server_attributes_url = f"{TB_HOST}/api/plugins/telemetry/DEVICE/{device_id}/attributes/SERVER_SCOPE"
-    server_attributes_payload = attributes  # 从配置文件中读取的 attributes 替代硬编码
-    server_attributes_resp = requests.post(server_attributes_url, json=server_attributes_payload, headers=headers)
-    try:
-        server_attributes_resp.raise_for_status()
-    except requests.exceptions.HTTPError as e:
-        print(f"设置服务器端属性时出错: {server_attributes_resp.status_code}, 响应内容: {server_attributes_resp.text}")
-        raise e
-    print(f"[4] 服务器端属性设置成功: {server_attributes_payload}")
-
-# === 第五步：获取设备的 Access Token ===
+    # 获取 Access Token
     get_credentials_url = f"{TB_HOST}/api/device/{device_id}/credentials"
     credentials_resp = requests.get(get_credentials_url, headers=headers)
     credentials_resp.raise_for_status()
     access_token = credentials_resp.json()['credentialsId']
-    print(f"[5] 设备的 Access Token 获取成功: {access_token}")
+    print(f"[INFO] 设备的 Access Token 获取成功: {access_token}")
 
     # 将 Access Token 写入配置文件
     config.set('Device', 'access_token', access_token)
     with open('config.ini', 'w') as configfile:
         config.write(configfile)
-    print(f"[6] Access Token 已写入配置文件: {access_token}")
+    print(f"[INFO] Access Token 已写入配置文件: {access_token}")
+
+# === 第四步：设置服务器端属性 ===
+server_attributes_url = f"{TB_HOST}/api/plugins/telemetry/DEVICE/{device_id}/attributes/SERVER_SCOPE"
+server_attributes_payload = attributes  # 从配置文件中读取的 attributes 替代硬编码
+server_attributes_resp = requests.post(server_attributes_url, json=server_attributes_payload, headers=headers)
+try:
+    server_attributes_resp.raise_for_status()
+except requests.exceptions.HTTPError as e:
+    print(f"设置服务器端属性时出错: {server_attributes_resp.status_code}, 响应内容: {server_attributes_resp.text}")
+    raise e
+print(f"[INFO] 服务器端属性设置成功: {server_attributes_payload}")
+
+# === 第五步：获取设备的 Access Token ===
+get_credentials_url = f"{TB_HOST}/api/device/{device_id}/credentials"
+credentials_resp = requests.get(get_credentials_url, headers=headers)
+credentials_resp.raise_for_status()
+access_token = credentials_resp.json()['credentialsId']
+print(f"[INFO] 设备的 Access Token 获取成功: {access_token}")
+
+# 将 Access Token 写入配置文件
+config.set('Device', 'access_token', access_token)
+with open('config.ini', 'w') as configfile:
+    config.write(configfile)
+print(f"[INFO] Access Token 已写入配置文件: {access_token}")
 
 # === 第六步：循环发送设备状态数据 ===
 telemetry_url = f"{TB_HOST}/api/v1/{access_token}/telemetry"
@@ -319,9 +356,9 @@ while True:
     try:
         telemetry_resp = requests.post(telemetry_url, json=telemetry_data, headers={'Content-Type': 'application/json'})
         telemetry_resp.raise_for_status()
-        print(f"[7] 遥测数据发送成功: {telemetry_data}")
+        print(f"[INFO] 遥测数据发送成功: {telemetry_data}")
     except requests.exceptions.RequestException as e:
-        print(f"[7] 遥测数据发送失败: {e}")
+        print(f"[ERROR] 遥测数据发送失败: {e}")
 
     # 等待 10 秒后发送下一次数据
     time.sleep(10)
