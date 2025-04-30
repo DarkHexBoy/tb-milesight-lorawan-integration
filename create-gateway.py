@@ -14,6 +14,7 @@
 import requests
 import json  # 用于处理 JSON 数据
 import configparser
+import time  # 用于循环和时间处理
 
 # 读取配置文件
 config = configparser.ConfigParser()
@@ -84,7 +85,7 @@ else:
                     "id": "gatewayOnlineAlarmID",
                     "alarmType": "Gateway Online Alarm",
                     "createRules": {
-                        "CRITICAL": {
+                        "MINOR": {
                             "condition": {
                                 "condition": [
                                     {
@@ -124,7 +125,8 @@ else:
                                 }
                             ]
                         }
-                    }
+                    },
+                    "detail": None,
                 },
                 {
                     "id": "gatewayOfflineAlarmID",
@@ -170,7 +172,8 @@ else:
                                 }
                             ]
                         }
-                    }
+                    },
+                    "detail": None,
                 },
                 {
                     "id": "noDataAlarmID",
@@ -218,7 +221,8 @@ else:
                                 }
                             ]
                         }
-                    }
+                    },
+                    "detail": None,
                 }
             ]  # 暂时移除告警规则以排查问题
         }
@@ -242,8 +246,12 @@ get_devices_resp.raise_for_status()
 existing_devices = get_devices_resp.json().get('data', [])
 existing_device = next((d for d in existing_devices if d['name'] == device_name), None)
 
+# 如果设备已存在，从配置文件中读取 Access Token
 if existing_device:
-    print(f"设备已存在，跳过创建: {device_name}")
+    access_token = config['Device'].get('access_token')
+    if not access_token:
+        print("[Error] 设备已存在，但配置文件中未找到 Access Token。请检查配置文件。")
+        exit(1)
 else:
     device_payload = {
         "name": device_name,  # 使用自定义设备名
@@ -285,3 +293,35 @@ else:
     with open('config.ini', 'w') as configfile:
         config.write(configfile)
     print(f"[6] Access Token 已写入配置文件: {access_token}")
+
+# === 第六步：循环发送设备状态数据 ===
+telemetry_url = f"{TB_HOST}/api/v1/{access_token}/telemetry"
+
+while True:
+    # 构造数据
+    telemetry_data = {
+        "Local Time": time.strftime("%Y-%m-%d %H:%M:%S %A"),
+        "Uptime": "13days,03:26:19",
+        "CPU Load": "7%",
+        "RAM": {
+            "Capacity": "512MB",
+            "Available": "121MB",
+            "Usage": "23.63%"
+        },
+        "eMMC": {
+            "Capacity": "8.0GB",
+            "Available": "6.5GB",
+            "Usage": "80.88%"
+        }
+    }
+
+    # 发送数据
+    try:
+        telemetry_resp = requests.post(telemetry_url, json=telemetry_data, headers={'Content-Type': 'application/json'})
+        telemetry_resp.raise_for_status()
+        print(f"[7] 遥测数据发送成功: {telemetry_data}")
+    except requests.exceptions.RequestException as e:
+        print(f"[7] 遥测数据发送失败: {e}")
+
+    # 等待 10 秒后发送下一次数据
+    time.sleep(10)
