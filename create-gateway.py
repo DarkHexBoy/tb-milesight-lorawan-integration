@@ -126,7 +126,7 @@ else:
                             ]
                         }
                     },
-                    "detail": None,
+                    "detail": None
                 },
                 {
                     "id": "gatewayOfflineAlarmID",
@@ -173,58 +173,9 @@ else:
                             ]
                         }
                     },
-                    "detail": None,
-                },
-                {
-                    "id": "noDataAlarmID",
-                    "alarmType": "No Data Alarm",
-                    "createRules": {
-                        "CRITICAL": {
-                            "condition": {
-                                "condition": [
-                                    {
-                                        "key": {
-                                            "type": "TIME_SERIES",
-                                            "key": "lastTelemetry"
-                                        },
-                                        "valueType": "NUMERIC",  # 修复为 NUMERIC 类型
-                                        "predicate": {
-                                            "type": "NUMERIC",
-                                            "operation": "GREATER",
-                                            "value": {
-                                                "defaultValue": 3600000  # 1小时无数据
-                                            },
-                                            "units": "ms"
-                                        }
-                                    }
-                                ]
-                            }
-                        }
-                    },
-                    "clearRule": {
-                        "condition": {
-                            "condition": [
-                                {
-                                    "key": {
-                                        "type": "TIME_SERIES",
-                                        "key": "lastTelemetry"
-                                    },
-                                    "valueType": "NUMERIC",
-                                    "predicate": {
-                                        "type": "NUMERIC",
-                                        "operation": "LESS_OR_EQUAL",
-                                        "value": {
-                                            "defaultValue": 3600000
-                                        },
-                                        "units": "ms"
-                                    }
-                                }
-                            ]
-                        }
-                    },
-                    "detail": None,
+                    "detail": None
                 }
-            ]  # 暂时移除告警规则以排查问题
+            ]  # 移除 no data alarm
         }
     }
     create_profile_resp = requests.post(create_device_profile_url, json=device_profile_payload, headers=headers)
@@ -349,7 +300,12 @@ while True:
             "Capacity": "8.0GB",
             "Available": "6.5GB",
             "Usage": "80.88%"
-        }
+        },
+        "storageCapacity": 8.0,  # 存储总容量，单位：GB
+        "storageUsed": 1.5,      # 已用存储空间，单位：GB
+        "storageAvailable": 6.5, # 可用存储空间，单位：GB
+        "storage.messageCount": 1,  # 模拟存储消息计数
+        "storage.dataPoints": 10   # 模拟推送的数据点
     }
 
     # 发送数据
